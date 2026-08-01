@@ -113,10 +113,10 @@ export default function BidRadarApp() {
     localStorage.setItem(BIDS_KEY, JSON.stringify(next));
   };
 
-  const saveToken = () => { setToken(tokenInput); if (tokenInput) setDemoMode(false); showToast("Token saved"); };
+  const saveToken = () => { const clean = tokenInput.trim(); setTokenInput(clean); setToken(clean); if (clean) setDemoMode(false); showToast("Token saved"); };
 
   const testConnection = async () => {
-    const t = tokenInput || token;
+    const t = (tokenInput || token).trim();
     if (!t) { setConnError("Paste a token first."); return; }
     setTestingConn(true);
     setConnError("");
@@ -125,7 +125,7 @@ export default function BidRadarApp() {
       const res = await fetch(`${base}/users/0.1/self/`, { headers: { "freelancer-oauth-v1": t } });
       if (!res.ok) {
         const bodyText = await res.text().catch(() => "");
-        throw new Error(`HTTP ${res.status}${bodyText ? " — " + bodyText.slice(0, 150) : ""}`);
+        throw new Error(`HTTP ${res.status} (token length: ${t.length})${bodyText ? " — " + bodyText.slice(0, 150) : ""}`);
       }
       const data = await res.json();
       const id = data?.result?.id;
