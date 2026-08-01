@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { Anchor, Radar, Send, Settings, RefreshCw, ExternalLink, Check, Clock, X, Loader2, Gauge } from "lucide-react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { Anchor, Radar, Send, Settings, RefreshCw, Check, Clock, X, Loader2, ArrowLeft, Search, TrendingUp, ListChecks, SlidersHorizontal } from "lucide-react";
 
 const TOKEN_KEY = "fl_oauth_token";
 const SKILLS_KEY = "fl_skill_keywords";
@@ -13,6 +13,7 @@ const DEMO_PROJECTS = [
   { id: "d1", title: "React dashboard for logistics tracking", description: "Need a full-stack developer to build a React + Node dashboard that tracks shipment status across three warehouses. Should include charts, CSV export, and role-based auth.", budget: "$750 - $1500", bids: 12, skills: ["React", "Node.js", "PostgreSQL"], time: "2h ago", currency: "USD" },
   { id: "d2", title: "SEO audit + Astro site migration", description: "Migrating a content site from WordPress to Astro. Need someone who understands SEO-safe redirects, JSON-LD structured data, and Core Web Vitals.", budget: "$400 - $800", bids: 6, skills: ["Astro", "SEO", "JavaScript"], time: "5h ago", currency: "USD" },
   { id: "d3", title: "Vite + Tailwind calculator tool build-out", description: "Looking for 10 additional unit converter tools added to an existing Vite/Tailwind SEO site. Must match existing component patterns.", budget: "$300 - $600", bids: 4, skills: ["React", "Vite", "Tailwind CSS"], time: "1d ago", currency: "USD" },
+  { id: "d4", title: "Fiji travel content writer + on-page SEO", description: "Weekly blog posts about Pacific island travel and relocation, need someone who understands local context and can hit SEO briefs.", budget: "$200 - $450", bids: 3, skills: ["SEO", "Content Writing"], time: "9h ago", currency: "USD" },
 ];
 
 const STATUS_META = {
@@ -22,6 +23,19 @@ const STATUS_META = {
   lost: { label: "Lost", color: "#C15B5B", icon: X },
 };
 
+const SORTS = {
+  fit: { label: "Best fit", fn: (a, b) => b.score - a.score },
+  budget: { label: "Highest budget", fn: (a, b) => parseBudget(b.budget) - parseBudget(a.budget) },
+  newest: { label: "Newest", fn: (a, b) => (b.time_submitted || 0) - (a.time_submitted || 0) },
+  fewestBids: { label: "Least competition", fn: (a, b) => a.bids - b.bids },
+};
+
+function parseBudget(str) {
+  const m = (str || "").match(/[\d,]+(\.\d+)?/g);
+  if (!m) return 0;
+  return Math.max(...m.map(x => parseFloat(x.replace(/,/g, ""))));
+}
+
 function scoreProject(project, keywords) {
   if (!keywords.length) return 50;
   const haystack = (project.title + " " + project.description + " " + (project.skills || []).join(" ")).toLowerCase();
@@ -29,11 +43,27 @@ function scoreProject(project, keywords) {
   return Math.min(100, Math.round((hits / keywords.length) * 100));
 }
 
-export default function FreelancerCopilot() {
-  const [token, setToken] = useState("");
+function useLocalState(key, initial) {
+  const [val, setVal] = useState(initial);
+  useEffect(() => {
+    const stored = localStorage.getItem(key);
+    if (stored !== null) setVal(stored);
+  }, []);
+  const save = (v) => { setVal(v); localStorage.setItem(key, v); };
+  return [val, save];
+}
+
+export default function BidRadarApp() {
+  const [view, setView] = useState("radar"); // radar | bids | setup
+  const [token, setToken] = useLocalState(TOKEN_KEY, "");
   const [tokenInput, setTokenInput] = useState("");
-  const [demoMode, setDemoMode] = useState(true);
-  const [skillsInput, setSkillsInput] = useState("React, Node.js, SEO, Astro, Tailwind");
+  const [demoMode, setDemoModeRaw] = useState(true);
+  const [skillsInput, setSkillsInput] = useLocalState(SKILLS_KEY, "React, Node.js, SEO, Astro, Tailwind");
+  const [proxyUrl, setProxyUrl] = useLocalState(PROXY_KEY, "");
+  const [proxyInput, setProxyInput] = useState("");
+  const [anthropicKey, setAnthropicKey] = useLocalState(ANTHROPIC_KEY, "");
+  const [anthropicKeyInput, setAnthropicKeyInput] = useState("");
+
   const [projects, setProjects] = useState([]);
   const [selected, setSelected] = useState(null);
   const [draft, setDraft] = useState("");
@@ -42,76 +72,53 @@ export default function FreelancerCopilot() {
   const [bidAmount, setBidAmount] = useState("");
   const [bidStatuses, setBidStatuses] = useState({});
   const [fetchError, setFetchError] = useState("");
-  const [showSettings, setShowSettings] = useState(false);
   const [ready, setReady] = useState(false);
-  const [proxyUrl, setProxyUrl] = useState("");
-  const [proxyInput, setProxyInput] = useState("");
-  const [anthropicKey, setAnthropicKey] = useState("");
-  const [anthropicKeyInput, setAnthropicKeyInput] = useState("");
+  const [toast, setToast] = useState("");
+  const [query, setQuery] = useState("");
+  const [sortKey, setSortKey] = useState("fit");
+  const [showSort, setShowSort] = useState(false);
+  const [bidFilter, setBidFilter] = useState("all");
+
+  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2200); };
 
   useEffect(() => {
-    const t = localStorage.getItem(TOKEN_KEY);
-    if (t) { setToken(t); setTokenInput(t); }
-    const s = localStorage.getItem(SKILLS_KEY);
-    if (s) setSkillsInput(s);
+    const t = localStorage.getItem(TOKEN_KEY); if (t) setTokenInput(t);
+    const p = localStorage.getItem(PROXY_KEY); if (p) setProxyInput(p);
+    const a = localStorage.getItem(ANTHROPIC_KEY); if (a) setAnthropicKeyInput(a);
+    const d = localStorage.getItem(DEMO_KEY); setDemoModeRaw(d === null ? true : d === "true");
     const b = localStorage.getItem(BIDS_KEY);
     if (b) { try { setBidStatuses(JSON.parse(b)); } catch (e) {} }
-    const d = localStorage.getItem(DEMO_KEY);
-    if (d) setDemoMode(d === "true");
-    const p = localStorage.getItem(PROXY_KEY);
-    if (p) { setProxyUrl(p); setProxyInput(p); }
-    const a = localStorage.getItem(ANTHROPIC_KEY);
-    if (a) { setAnthropicKey(a); setAnthropicKeyInput(a); }
     setReady(true);
   }, []);
+
+  const setDemoMode = (v) => { setDemoModeRaw(v); localStorage.setItem(DEMO_KEY, v ? "true" : "false"); };
 
   const persistBidStatuses = (next) => {
     setBidStatuses(next);
     localStorage.setItem(BIDS_KEY, JSON.stringify(next));
   };
 
-  const saveToken = () => {
-    setToken(tokenInput);
-    localStorage.setItem(TOKEN_KEY, tokenInput);
-    if (tokenInput) setDemoMode(false);
-    localStorage.setItem(DEMO_KEY, tokenInput ? "false" : "true");
-  };
+  const saveToken = () => { setToken(tokenInput); if (tokenInput) setDemoMode(false); showToast("Token saved"); };
+  const saveProxy = () => { setProxyUrl(proxyInput.trim().replace(/\/$/, "")); showToast("Proxy URL saved"); };
+  const saveAnthropic = () => { setAnthropicKey(anthropicKeyInput.trim()); showToast("Anthropic key saved"); };
 
-  const saveSkills = (val) => {
-    setSkillsInput(val);
-    localStorage.setItem(SKILLS_KEY, val);
-  };
-
-  const saveProxy = () => {
-    const trimmed = proxyInput.trim().replace(/\/$/, "");
-    setProxyUrl(trimmed);
-    localStorage.setItem(PROXY_KEY, trimmed);
-  };
-
-  const saveAnthropicKey = () => {
-    setAnthropicKey(anthropicKeyInput.trim());
-    localStorage.setItem(ANTHROPIC_KEY, anthropicKeyInput.trim());
-  };
-
-  // If a proxy is configured, route calls through it: {proxy}/api/... instead of https://www.freelancer.com/api/...
   const apiBase = proxyUrl ? `${proxyUrl}/api` : DEFAULT_API_BASE;
-
-  const keywords = skillsInput.split(",").map(s => s.trim()).filter(Boolean);
+  const keywords = useMemo(() => skillsInput.split(",").map(s => s.trim()).filter(Boolean), [skillsInput]);
 
   const fetchProjects = useCallback(async () => {
     setLoading(true);
     setFetchError("");
     if (demoMode || !token) {
       setTimeout(() => {
-        setProjects(DEMO_PROJECTS.map(p => ({ ...p, score: scoreProject(p, keywords) })).sort((a, b) => b.score - a.score));
+        setProjects(DEMO_PROJECTS.map(p => ({ ...p, score: scoreProject(p, keywords) })));
         setLoading(false);
-      }, 500);
+      }, 400);
       return;
     }
     try {
-      const query = keywords.join(" ");
+      const q = keywords.join(" ");
       const res = await fetch(
-        `${apiBase}/projects/0.1/projects/active/?query=${encodeURIComponent(query)}&full_description=true&job_details=true&limit=20`,
+        `${apiBase}/projects/0.1/projects/active/?query=${encodeURIComponent(q)}&full_description=true&job_details=true&limit=30`,
         { headers: { "freelancer-oauth-v1": token } }
       );
       if (!res.ok) {
@@ -123,42 +130,56 @@ export default function FreelancerCopilot() {
       const mapped = raw.map(p => ({
         id: p.id,
         title: p.title,
-        description: (p.description || p.preview_description || "").slice(0, 600),
+        description: (p.description || p.preview_description || "").slice(0, 700),
         budget: p.budget ? `${p.budget.minimum ?? "?"} - ${p.budget.maximum ?? "?"} ${p.currency?.code || ""}` : "Not specified",
         bids: p.bid_stats?.bid_count ?? 0,
         skills: (p.jobs || []).map(j => j.name),
-        time: new Date((p.time_submitted || 0) * 1000).toLocaleString(),
+        time: new Date((p.time_submitted || 0) * 1000).toLocaleDateString(),
+        time_submitted: p.time_submitted || 0,
         currency: p.currency?.code || "",
       }));
-      setProjects(mapped.map(p => ({ ...p, score: scoreProject(p, keywords) })).sort((a, b) => b.score - a.score));
+      setProjects(mapped.map(p => ({ ...p, score: scoreProject(p, keywords) })));
     } catch (e) {
       const usingProxy = !!proxyUrl;
       setFetchError(
         usingProxy
-          ? `Request through your proxy failed: "${e.message}". Showing demo data. Check the worker is deployed and the URL is exactly right (no trailing slash issues), and that your OAuth token is valid.`
-          : "Couldn't reach Freelancer.com's API directly from the browser (likely blocked by CORS on their end). Showing demo data instead — set up a proxy in Setup and try again."
+          ? `Request through your proxy failed: "${e.message}". Showing demo data.`
+          : "Couldn't reach Freelancer.com directly (CORS). Set up a proxy in Setup."
       );
-      setProjects(DEMO_PROJECTS.map(p => ({ ...p, score: scoreProject(p, keywords) })).sort((a, b) => b.score - a.score));
+      setProjects(DEMO_PROJECTS.map(p => ({ ...p, score: scoreProject(p, keywords) })));
     }
     setLoading(false);
-  }, [token, demoMode, skillsInput, proxyUrl]);
+  }, [token, demoMode, keywords, proxyUrl]);
 
   useEffect(() => { if (ready) fetchProjects(); }, [ready]);
+
+  const visibleProjects = useMemo(() => {
+    let list = projects;
+    if (query.trim()) {
+      const q = query.toLowerCase();
+      list = list.filter(p => p.title.toLowerCase().includes(q) || (p.skills || []).some(s => s.toLowerCase().includes(q)));
+    }
+    return [...list].sort(SORTS[sortKey].fn);
+  }, [projects, query, sortKey]);
+
+  const stats = useMemo(() => {
+    const vals = Object.values(bidStatuses);
+    const submitted = vals.filter(v => v.status === "submitted").length;
+    const won = vals.filter(v => v.status === "won").length;
+    const lost = vals.filter(v => v.status === "lost").length;
+    const decided = won + lost;
+    return { total: vals.length, submitted, won, lost, winRate: decided ? Math.round((won / decided) * 100) : null };
+  }, [bidStatuses]);
 
   const openProject = (p) => {
     setSelected(p);
     setDraft("");
-    const mid = p.budget?.match(/\d+/g);
-    setBidAmount(mid ? mid[0] : "");
+    setBidAmount(String(Math.round(parseBudget(p.budget)) || ""));
   };
 
   const generateDraft = async () => {
     if (!selected) return;
-    if (!anthropicKey) {
-      setDraft("");
-      setFetchError("Add an Anthropic API key in Setup to generate drafts (get one at console.anthropic.com).");
-      return;
-    }
+    if (!anthropicKey) { showToast("Add an Anthropic API key in Setup first"); return; }
     setDrafting(true);
     try {
       const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -189,131 +210,97 @@ export default function FreelancerCopilot() {
 
   const submitBid = async () => {
     if (!selected) return;
-    const next = { ...bidStatuses, [selected.id]: { status: "submitted", amount: bidAmount, at: Date.now() } };
-    if (demoMode || !token) {
-      persistBidStatuses(next);
-      return;
-    }
+    const next = { ...bidStatuses, [selected.id]: { status: "submitted", amount: bidAmount, at: Date.now(), title: selected.title, budget: selected.budget } };
+    if (demoMode || !token) { persistBidStatuses(next); showToast("Bid saved (demo mode)"); return; }
     try {
       const res = await fetch(`${apiBase}/projects/0.1/bids/`, {
         method: "POST",
         headers: { "freelancer-oauth-v1": token, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          project_id: selected.id,
-          bidder_id: null,
-          amount: Number(bidAmount),
-          period: 7,
-          milestone_percentage: 100,
-          description: draft,
-        })
+        body: JSON.stringify({ project_id: selected.id, bidder_id: null, amount: Number(bidAmount), period: 7, milestone_percentage: 100, description: draft })
       });
       if (!res.ok) throw new Error();
       persistBidStatuses(next);
+      showToast("Bid submitted");
     } catch (e) {
-      setFetchError("Bid submission failed — check your token/CORS proxy setup. Nothing was sent.");
+      showToast("Bid submission failed — nothing was sent");
     }
   };
 
   const markStatus = (id, status) => {
     const cur = bidStatuses[id] || {};
     persistBidStatuses({ ...bidStatuses, [id]: { ...cur, status } });
+    showToast(`Marked as ${STATUS_META[status].label}`);
   };
 
+  const bidList = useMemo(() => {
+    const entries = Object.entries(bidStatuses).map(([id, v]) => ({ id, ...v }));
+    entries.sort((a, b) => (b.at || 0) - (a.at || 0));
+    if (bidFilter === "all") return entries;
+    return entries.filter(e => e.status === bidFilter);
+  }, [bidStatuses, bidFilter]);
+
   return (
-    <div style={{ minHeight: "100vh", background: "#12161C", color: "#E8E6E1", fontFamily: "'Inter', sans-serif" }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
-        * { box-sizing: border-box; }
-        ::selection { background: #E8A33D44; }
-        .mono { font-family: 'JetBrains Mono', monospace; }
-        .display { font-family: 'Space Grotesk', sans-serif; }
-        button { cursor: pointer; font-family: inherit; }
-        input, textarea { font-family: inherit; }
-        .scrollpane::-webkit-scrollbar { width: 6px; }
-        .scrollpane::-webkit-scrollbar-thumb { background: #2A303B; border-radius: 3px; }
-      `}</style>
+    <div style={{ minHeight: "100vh", background: "#12161C", color: "#E8E6E1", fontFamily: "'Inter', sans-serif", paddingBottom: 76 }}>
+      <GlobalStyle />
 
       {/* Header */}
-      <div style={{ borderBottom: "1px solid #232833", padding: "18px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#12161Cee", backdropFilter: "blur(8px)", zIndex: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <Anchor size={22} color="#E8A33D" />
+      <div style={{ borderBottom: "1px solid #232833", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#12161Cee", backdropFilter: "blur(8px)", zIndex: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Anchor size={20} color="#E8A33D" />
           <div>
-            <div className="display" style={{ fontSize: 18, fontWeight: 600, letterSpacing: "-0.01em" }}>Bid Radar</div>
-            <div className="mono" style={{ fontSize: 11, color: "#5A6270" }}>{demoMode ? "DEMO MODE" : "LIVE · freelancer.com"}</div>
+            <div className="display" style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.01em" }}>Bid Radar</div>
+            <div className="mono" style={{ fontSize: 10, color: demoMode ? "#5A6270" : "#4FAE7E" }}>{demoMode ? "DEMO MODE" : "● LIVE · freelancer.com"}</div>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button onClick={fetchProjects} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", borderRadius: 8, padding: "8px 14px", fontSize: 13 }}>
-            {loading ? <Loader2 size={14} className="spin" style={{ animation: "spin 1s linear infinite" }} /> : <RefreshCw size={14} />}
-            Refresh
-          </button>
-          <button onClick={() => setShowSettings(s => !s)} style={{ display: "flex", alignItems: "center", gap: 6, background: showSettings ? "#E8A33D" : "#1A1F27", border: "1px solid #2A303B", color: showSettings ? "#12161C" : "#E8E6E1", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 500 }}>
-            <Settings size={14} /> Setup
-          </button>
-        </div>
+        <button onClick={fetchProjects} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", borderRadius: 8, padding: "7px 12px", fontSize: 12 }}>
+          {loading ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
+        </button>
       </div>
 
-      {showSettings && (
-        <div style={{ borderBottom: "1px solid #232833", padding: "20px 28px", background: "#161B22", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-          <div>
-            <div style={{ fontSize: 12, color: "#8B93A1", marginBottom: 6 }}>Freelancer.com OAuth token (personal, stored only on this device)</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input value={tokenInput} onChange={e => setTokenInput(e.target.value)} placeholder="Paste your API token" type="password" style={{ flex: 1, background: "#0F1319", border: "1px solid #2A303B", borderRadius: 6, padding: "8px 10px", color: "#E8E6E1", fontSize: 13 }} />
-              <button onClick={saveToken} style={{ background: "#E8A33D", color: "#12161C", border: "none", borderRadius: 6, padding: "8px 14px", fontSize: 13, fontWeight: 600 }}>Save</button>
-            </div>
-            <div style={{ fontSize: 11, color: "#5A6270", marginTop: 6, lineHeight: 1.5 }}>
-              Generate a token at freelancer.com → Settings → API. Without one, this stays in demo mode with sample jobs so you can try the workflow.
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: "#8B93A1", marginBottom: 6 }}>Skills / keywords to match against jobs</div>
-            <input value={skillsInput} onChange={e => saveSkills(e.target.value)} style={{ width: "100%", background: "#0F1319", border: "1px solid #2A303B", borderRadius: 6, padding: "8px 10px", color: "#E8E6E1", fontSize: 13 }} />
-            <div style={{ fontSize: 11, color: "#5A6270", marginTop: 6 }}>Comma-separated. Drives the match score on each job.</div>
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <div style={{ fontSize: 12, color: "#8B93A1", marginBottom: 6 }}>Proxy URL (only needed if direct calls get CORS-blocked)</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input value={proxyInput} onChange={e => setProxyInput(e.target.value)} placeholder="https://your-worker.workers.dev" style={{ flex: 1, background: "#0F1319", border: "1px solid #2A303B", borderRadius: 6, padding: "8px 10px", color: "#E8E6E1", fontSize: 13 }} />
-              <button onClick={saveProxy} style={{ background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", borderRadius: 6, padding: "8px 14px", fontSize: 13 }}>Save</button>
-            </div>
-            <div style={{ fontSize: 11, color: "#5A6270", marginTop: 6 }}>Leave blank to call freelancer.com directly. Deploy the Cloudflare Worker proxy (provided separately) and paste its URL here if you hit a CORS error.</div>
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <div style={{ fontSize: 12, color: "#8B93A1", marginBottom: 6 }}>Anthropic API key (for drafting proposals)</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input value={anthropicKeyInput} onChange={e => setAnthropicKeyInput(e.target.value)} placeholder="sk-ant-..." type="password" style={{ flex: 1, background: "#0F1319", border: "1px solid #2A303B", borderRadius: 6, padding: "8px 10px", color: "#E8E6E1", fontSize: 13 }} />
-              <button onClick={saveAnthropicKey} style={{ background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", borderRadius: 6, padding: "8px 14px", fontSize: 13 }}>Save</button>
-            </div>
-            <div style={{ fontSize: 11, color: "#5A6270", marginTop: 6 }}>Get one at console.anthropic.com → API Keys. Stored only in this browser's local storage, never sent anywhere but Anthropic's API.</div>
-          </div>
-        </div>
-      )}
-
       {fetchError && (
-        <div style={{ margin: "16px 28px 0", padding: "12px 16px", background: "#2A1F1A", border: "1px solid #4A3324", borderRadius: 8, fontSize: 13, color: "#E0B98F" }}>
-          {fetchError}
-        </div>
+        <div style={{ margin: "12px 16px 0", padding: "10px 14px", background: "#2A1F1A", border: "1px solid #4A3324", borderRadius: 8, fontSize: 12, color: "#E0B98F" }}>{fetchError}</div>
       )}
 
-      {/* Main */}
-      <div style={{ display: "grid", gridTemplateColumns: selected ? "420px 1fr" : "1fr", gap: 0, minHeight: "calc(100vh - 73px)" }}>
-        {/* Job list */}
-        <div className="scrollpane" style={{ borderRight: selected ? "1px solid #232833" : "none", padding: "20px 20px 40px", overflowY: "auto", maxHeight: "calc(100vh - 73px)" }}>
-          <div style={{ fontSize: 12, color: "#5A6270", marginBottom: 14, display: "flex", justifyContent: "space-between" }}>
-            <span>{projects.length} matching projects</span>
-            <span className="mono">sorted by fit</span>
+      {/* RADAR VIEW */}
+      {view === "radar" && !selected && (
+        <div style={{ padding: "16px 16px 8px" }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            <div style={{ flex: 1, display: "flex", alignItems: "center", background: "#161B22", border: "1px solid #232833", borderRadius: 10, padding: "0 12px" }}>
+              <Search size={15} color="#5A6270" />
+              <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search jobs or skills" style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#E8E6E1", padding: "10px 8px", fontSize: 13 }} />
+            </div>
+            <button onClick={() => setShowSort(s => !s)} style={{ display: "flex", alignItems: "center", gap: 6, background: showSort ? "#E8A33D" : "#161B22", color: showSort ? "#12161C" : "#E8E6E1", border: "1px solid #232833", borderRadius: 10, padding: "0 14px", fontSize: 12, fontWeight: 500 }}>
+              <SlidersHorizontal size={14} />
+            </button>
           </div>
-          {projects.map(p => {
+
+          {showSort && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+              {Object.entries(SORTS).map(([k, s]) => (
+                <button key={k} onClick={() => { setSortKey(k); setShowSort(false); }} style={{ fontSize: 12, padding: "6px 12px", borderRadius: 20, border: `1px solid ${sortKey === k ? "#E8A33D" : "#2A303B"}`, background: sortKey === k ? "#E8A33D22" : "#161B22", color: sortKey === k ? "#E8A33D" : "#8B93A1" }}>
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div style={{ fontSize: 12, color: "#5A6270", marginBottom: 10 }}>{visibleProjects.length} matching projects · sorted by {SORTS[sortKey].label.toLowerCase()}</div>
+
+          {visibleProjects.length === 0 && !loading && (
+            <EmptyState title="No matches" subtitle="Try different keywords in Setup, or clear your search." />
+          )}
+
+          {visibleProjects.map(p => {
             const status = bidStatuses[p.id]?.status;
             const meta = status ? STATUS_META[status] : null;
             return (
               <div key={p.id} onClick={() => openProject(p)}
-                style={{ padding: "14px 16px", marginBottom: 10, borderRadius: 10, border: `1px solid ${selected?.id === p.id ? "#E8A33D" : "#232833"}`, background: selected?.id === p.id ? "#1D1912" : "#161B22", transition: "all 0.15s" }}>
+                style={{ padding: "14px 16px", marginBottom: 10, borderRadius: 12, border: "1px solid #232833", background: "#161B22" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.3 }}>{p.title}</div>
-                  <div className="mono" style={{ fontSize: 12, fontWeight: 600, color: p.score >= 70 ? "#4FAE7E" : p.score >= 40 ? "#E8A33D" : "#5A6270", flexShrink: 0 }}>{p.score}%</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.35 }}>{p.title}</div>
+                  <div className="mono" style={{ fontSize: 12, fontWeight: 700, color: p.score >= 70 ? "#4FAE7E" : p.score >= 40 ? "#E8A33D" : "#5A6270", flexShrink: 0 }}>{p.score}%</div>
                 </div>
-                <div style={{ fontSize: 12, color: "#8B93A1", marginTop: 6, display: "flex", gap: 12 }}>
+                <div style={{ fontSize: 12, color: "#8B93A1", marginTop: 6, display: "flex", gap: 12, flexWrap: "wrap" }}>
                   <span className="mono">{p.budget}</span>
                   <span>{p.bids} bids</span>
                   <span>{p.time}</span>
@@ -327,17 +314,21 @@ export default function FreelancerCopilot() {
             );
           })}
         </div>
+      )}
 
-        {/* Detail panel */}
-        {selected && (
-          <div className="scrollpane" style={{ padding: "24px 32px 60px", overflowY: "auto", maxHeight: "calc(100vh - 73px)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-              <h2 className="display" style={{ fontSize: 22, fontWeight: 600, margin: 0, maxWidth: 500 }}>{selected.title}</h2>
-              <button onClick={() => setSelected(null)} style={{ background: "none", border: "none", color: "#5A6270" }}><X size={18} /></button>
-            </div>
-            <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 13, color: "#8B93A1" }}>
+      {/* JOB DETAIL — full screen overlay */}
+      {selected && (
+        <div style={{ position: "fixed", inset: 0, background: "#12161C", zIndex: 30, overflowY: "auto" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "16px 20px", borderBottom: "1px solid #232833", position: "sticky", top: 0, background: "#12161Cee", backdropFilter: "blur(8px)" }}>
+            <button onClick={() => setSelected(null)} style={{ background: "none", border: "none", color: "#E8E6E1", display: "flex" }}><ArrowLeft size={20} /></button>
+            <div className="display" style={{ fontSize: 15, fontWeight: 600 }}>Project details</div>
+          </div>
+          <div style={{ padding: "20px 20px 40px" }}>
+            <h2 className="display" style={{ fontSize: 20, fontWeight: 600, margin: 0, lineHeight: 1.3 }}>{selected.title}</h2>
+            <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 13, color: "#8B93A1", flexWrap: "wrap" }}>
               <span className="mono">{selected.budget}</span>
               <span>{selected.bids} bids so far</span>
+              <span className="mono" style={{ color: selected.score >= 70 ? "#4FAE7E" : "#E8A33D" }}>{selected.score}% fit</span>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
               {(selected.skills || []).map(s => (
@@ -346,18 +337,18 @@ export default function FreelancerCopilot() {
             </div>
             <p style={{ fontSize: 14, lineHeight: 1.7, color: "#C7CBD1", marginTop: 18, whiteSpace: "pre-wrap" }}>{selected.description}</p>
 
-            <div style={{ marginTop: 28, borderTop: "1px solid #232833", paddingTop: 24 }}>
+            <div style={{ marginTop: 26, borderTop: "1px solid #232833", paddingTop: 22 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                 <div className="display" style={{ fontSize: 15, fontWeight: 600 }}>Proposal draft</div>
                 <button onClick={generateDraft} disabled={drafting} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", borderRadius: 8, padding: "7px 12px", fontSize: 12 }}>
-                  {drafting ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <Radar size={13} />}
+                  {drafting ? <Loader2 size={13} className="spin" /> : <Radar size={13} />}
                   {draft ? "Regenerate" : "Generate draft"}
                 </button>
               </div>
-              <textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Generate a draft, then edit it in your own voice before sending — nothing here submits automatically."
+              <textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Generate a draft, then edit it in your own voice — nothing here submits automatically."
                 style={{ width: "100%", minHeight: 160, background: "#0F1319", border: "1px solid #2A303B", borderRadius: 8, padding: 14, color: "#E8E6E1", fontSize: 13, lineHeight: 1.6, resize: "vertical" }} />
 
-              <div style={{ display: "flex", gap: 12, marginTop: 14, alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 10, marginTop: 14, alignItems: "center", flexWrap: "wrap" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ fontSize: 12, color: "#8B93A1" }}>Bid amount</span>
                   <input value={bidAmount} onChange={e => setBidAmount(e.target.value)} className="mono" style={{ width: 90, background: "#0F1319", border: "1px solid #2A303B", borderRadius: 6, padding: "6px 10px", color: "#E8E6E1", fontSize: 13 }} />
@@ -368,8 +359,8 @@ export default function FreelancerCopilot() {
               </div>
 
               {bidStatuses[selected.id] && (
-                <div style={{ marginTop: 18, display: "flex", gap: 8 }}>
-                  <span style={{ fontSize: 12, color: "#8B93A1", alignSelf: "center" }}>Update status:</span>
+                <div style={{ marginTop: 18, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, color: "#8B93A1", alignSelf: "center" }}>Status:</span>
                   {["submitted", "won", "lost"].map(s => (
                     <button key={s} onClick={() => markStatus(selected.id, s)} style={{ fontSize: 11, background: bidStatuses[selected.id].status === s ? STATUS_META[s].color + "33" : "#1A1F27", color: bidStatuses[selected.id].status === s ? STATUS_META[s].color : "#8B93A1", border: `1px solid ${bidStatuses[selected.id].status === s ? STATUS_META[s].color : "#2A303B"}`, borderRadius: 20, padding: "4px 10px" }}>
                       {STATUS_META[s].label}
@@ -379,10 +370,172 @@ export default function FreelancerCopilot() {
               )}
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      {/* BIDS VIEW */}
+      {view === "bids" && !selected && (
+        <div style={{ padding: "16px 16px 8px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 16 }}>
+            <StatCard label="Total" value={stats.total} />
+            <StatCard label="Submitted" value={stats.submitted} color="#E8A33D" />
+            <StatCard label="Won" value={stats.won} color="#4FAE7E" />
+            <StatCard label="Win rate" value={stats.winRate === null ? "—" : stats.winRate + "%"} color="#4FAE7E" />
+          </div>
+
+          <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto" }}>
+            {["all", "submitted", "won", "lost"].map(f => (
+              <button key={f} onClick={() => setBidFilter(f)} style={{ fontSize: 12, padding: "6px 12px", borderRadius: 20, whiteSpace: "nowrap", border: `1px solid ${bidFilter === f ? "#E8A33D" : "#2A303B"}`, background: bidFilter === f ? "#E8A33D22" : "#161B22", color: bidFilter === f ? "#E8A33D" : "#8B93A1" }}>
+                {f === "all" ? "All" : STATUS_META[f].label}
+              </button>
+            ))}
+          </div>
+
+          {bidList.length === 0 && <EmptyState title="No bids yet" subtitle="Submitted bids will show up here so you can track outcomes." />}
+
+          {bidList.map(b => {
+            const meta = STATUS_META[b.status] || STATUS_META.drafted;
+            return (
+              <div key={b.id} style={{ padding: "14px 16px", marginBottom: 10, borderRadius: 12, border: "1px solid #232833", background: "#161B22" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.35 }}>{b.title || "Untitled project"}</div>
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: meta.color, background: meta.color + "1a", padding: "3px 8px", borderRadius: 20, height: "fit-content", flexShrink: 0 }}>
+                    <meta.icon size={11} /> {meta.label}
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, color: "#8B93A1", marginTop: 6, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  {b.amount && <span className="mono">Bid: ${b.amount}</span>}
+                  {b.budget && <span className="mono">{b.budget}</span>}
+                  <span>{b.at ? new Date(b.at).toLocaleDateString() : ""}</span>
+                </div>
+                <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+                  {["submitted", "won", "lost"].map(s => (
+                    <button key={s} onClick={() => markStatus(b.id, s)} style={{ fontSize: 11, background: b.status === s ? STATUS_META[s].color + "33" : "#1A1F27", color: b.status === s ? STATUS_META[s].color : "#8B93A1", border: `1px solid ${b.status === s ? STATUS_META[s].color : "#2A303B"}`, borderRadius: 20, padding: "3px 10px" }}>
+                      {STATUS_META[s].label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* SETUP VIEW */}
+      {view === "setup" && !selected && (
+        <div style={{ padding: "20px 16px 40px", maxWidth: 560 }}>
+          <Field label="Freelancer.com OAuth token" hint="Generate at freelancer.com → Settings → API. Without one, this stays in demo mode.">
+            <div style={{ display: "flex", gap: 8 }}>
+              <input value={tokenInput} onChange={e => setTokenInput(e.target.value)} type="password" placeholder="Paste token" style={inputStyle} />
+              <button onClick={saveToken} style={saveBtnStyle}>Save</button>
+            </div>
+          </Field>
+
+          <Field label="Skills / keywords" hint="Comma-separated. Drives the fit score on each job.">
+            <input value={skillsInput} onChange={e => setSkillsInput(e.target.value)} style={{ ...inputStyle, width: "100%" }} />
+          </Field>
+
+          <Field label="Proxy URL" hint="Only needed if direct calls get CORS-blocked. Leave blank to call freelancer.com directly.">
+            <div style={{ display: "flex", gap: 8 }}>
+              <input value={proxyInput} onChange={e => setProxyInput(e.target.value)} placeholder="https://your-worker.workers.dev" style={inputStyle} />
+              <button onClick={saveProxy} style={saveBtnStyle}>Save</button>
+            </div>
+          </Field>
+
+          <Field label="Anthropic API key" hint="From console.anthropic.com → API Keys. Used to draft proposals. Stored only in this browser.">
+            <div style={{ display: "flex", gap: 8 }}>
+              <input value={anthropicKeyInput} onChange={e => setAnthropicKeyInput(e.target.value)} type="password" placeholder="sk-ant-..." style={inputStyle} />
+              <button onClick={saveAnthropic} style={saveBtnStyle}>Save</button>
+            </div>
+          </Field>
+
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 0", borderTop: "1px solid #232833", marginTop: 8 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>Demo mode</div>
+              <div style={{ fontSize: 11, color: "#5A6270" }}>Browse sample jobs without a live token</div>
+            </div>
+            <button onClick={() => setDemoMode(!demoMode)} style={{ width: 44, height: 26, borderRadius: 20, background: demoMode ? "#E8A33D" : "#2A303B", border: "none", position: "relative", flexShrink: 0 }}>
+              <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#12161C", position: "absolute", top: 3, left: demoMode ? 21 : 3, transition: "left 0.15s" }} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div style={{ position: "fixed", bottom: 84, left: "50%", transform: "translateX(-50%)", background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", padding: "10px 18px", borderRadius: 30, fontSize: 13, zIndex: 40, boxShadow: "0 8px 24px #00000055" }}>
+          {toast}
+        </div>
+      )}
+
+      {/* Bottom nav */}
+      {!selected && (
+        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#161B22ee", backdropFilter: "blur(10px)", borderTop: "1px solid #232833", display: "flex", zIndex: 15 }}>
+          <NavButton icon={Radar} label="Radar" active={view === "radar"} onClick={() => setView("radar")} />
+          <NavButton icon={ListChecks} label="Bids" active={view === "bids"} onClick={() => setView("bids")} badge={stats.submitted || null} />
+          <NavButton icon={Settings} label="Setup" active={view === "setup"} onClick={() => setView("setup")} />
+        </div>
+      )}
     </div>
+  );
+}
+
+function NavButton({ icon: Icon, label, active, onClick, badge }) {
+  return (
+    <button onClick={onClick} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "10px 0 12px", background: "none", border: "none", color: active ? "#E8A33D" : "#5A6270", position: "relative" }}>
+      <Icon size={19} />
+      <span style={{ fontSize: 10.5, fontWeight: 500 }}>{label}</span>
+      {badge ? <span style={{ position: "absolute", top: 4, right: "28%", background: "#E8A33D", color: "#12161C", fontSize: 9, fontWeight: 700, borderRadius: 10, padding: "1px 5px" }}>{badge}</span> : null}
+    </button>
+  );
+}
+
+function StatCard({ label, value, color }) {
+  return (
+    <div style={{ background: "#161B22", border: "1px solid #232833", borderRadius: 10, padding: "10px 8px", textAlign: "center" }}>
+      <div className="mono" style={{ fontSize: 18, fontWeight: 700, color: color || "#E8E6E1" }}>{value}</div>
+      <div style={{ fontSize: 10, color: "#8B93A1", marginTop: 2 }}>{label}</div>
+    </div>
+  );
+}
+
+function EmptyState({ title, subtitle }) {
+  return (
+    <div style={{ textAlign: "center", padding: "50px 20px", color: "#5A6270" }}>
+      <TrendingUp size={28} style={{ opacity: 0.4, marginBottom: 10 }} />
+      <div style={{ fontSize: 14, fontWeight: 600, color: "#8B93A1" }}>{title}</div>
+      <div style={{ fontSize: 12, marginTop: 4 }}>{subtitle}</div>
+    </div>
+  );
+}
+
+function Field({ label, hint, children }) {
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ fontSize: 12, color: "#8B93A1", marginBottom: 6 }}>{label}</div>
+      {children}
+      <div style={{ fontSize: 11, color: "#5A6270", marginTop: 6, lineHeight: 1.5 }}>{hint}</div>
+    </div>
+  );
+}
+
+const inputStyle = { flex: 1, minWidth: 0, background: "#0F1319", border: "1px solid #2A303B", borderRadius: 6, padding: "9px 10px", color: "#E8E6E1", fontSize: 13 };
+const saveBtnStyle = { background: "#E8A33D", color: "#12161C", border: "none", borderRadius: 6, padding: "9px 14px", fontSize: 13, fontWeight: 600, flexShrink: 0 };
+
+function GlobalStyle() {
+  return (
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      ::selection { background: #E8A33D44; }
+      .mono { font-family: 'JetBrains Mono', monospace; }
+      .display { font-family: 'Space Grotesk', sans-serif; }
+      button { cursor: pointer; font-family: inherit; }
+      input, textarea { font-family: inherit; }
+      input:focus, textarea:focus { outline: 1px solid #E8A33D; }
+      .spin { animation: spin 1s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    `}</style>
   );
 }
