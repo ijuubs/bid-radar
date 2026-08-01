@@ -9,6 +9,8 @@ const PROXY_KEY = "fl_proxy_url";
 const ANTHROPIC_KEY = "fl_anthropic_key";
 const GROQ_KEY = "fl_groq_key";
 const DRAFT_PROVIDER_KEY = "fl_draft_provider";
+const USER_ID_KEY = "fl_user_id";
+const USER_NAME_KEY = "fl_user_name";
 const DEFAULT_API_BASE = "https://www.freelancer.com/api";
 
 const DEMO_PROJECTS = [
@@ -68,6 +70,10 @@ export default function BidRadarApp() {
   const [groqKey, setGroqKey] = useLocalState(GROQ_KEY, "");
   const [groqKeyInput, setGroqKeyInput] = useState("");
   const [draftProvider, setDraftProvider] = useLocalState(DRAFT_PROVIDER_KEY, "anthropic");
+  const [userId, setUserId] = useLocalState(USER_ID_KEY, "");
+  const [userName, setUserName] = useLocalState(USER_NAME_KEY, "");
+  const [testingConn, setTestingConn] = useState(false);
+  const [connError, setConnError] = useState("");
 
   const [projects, setProjects] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -108,6 +114,31 @@ export default function BidRadarApp() {
   };
 
   const saveToken = () => { setToken(tokenInput); if (tokenInput) setDemoMode(false); showToast("Token saved"); };
+
+  const testConnection = async () => {
+    const t = tokenInput || token;
+    if (!t) { setConnError("Paste a token first."); return; }
+    setTestingConn(true);
+    setConnError("");
+    try {
+      const base = proxyUrl ? `${proxyUrl}/api` : DEFAULT_API_BASE;
+      const res = await fetch(`${base}/users/0.1/self/`, { headers: { "freelancer-oauth-v1": t } });
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status}${bodyText ? " — " + bodyText.slice(0, 150) : ""}`);
+      }
+      const data = await res.json();
+      const id = data?.result?.id;
+      const username = data?.result?.username || data?.result?.display_name || "";
+      if (!id) throw new Error("Token looked valid but no user ID came back — try regenerating it.");
+      setUserId(String(id));
+      setUserName(username);
+      showToast(`Connected as ${username || id}`);
+    } catch (e) {
+      setConnError(e.message || "Connection test failed.");
+    }
+    setTestingConn(false);
+  };
   const saveProxy = () => { setProxyUrl(proxyInput.trim().replace(/\/$/, "")); showToast("Proxy URL saved"); };
   const saveAnthropic = () => { setAnthropicKey(anthropicKeyInput.trim()); showToast("Anthropic key saved"); };
   const saveGroq = () => { setGroqKey(groqKeyInput.trim()); showToast("Groq key saved"); };
@@ -253,7 +284,7 @@ export default function BidRadarApp() {
       const res = await fetch(`${apiBase}/projects/0.1/bids/`, {
         method: "POST",
         headers: { "freelancer-oauth-v1": token, "Content-Type": "application/json" },
-        body: JSON.stringify({ project_id: selected.id, bidder_id: null, amount: Number(bidAmount), period: 7, milestone_percentage: 100, description: draft })
+        body: JSON.stringify({ project_id: selected.id, bidder_id: userId ? Number(userId) : undefined, amount: Number(bidAmount), period: 7, milestone_percentage: 100, description: draft })
       });
       if (!res.ok) {
         const bodyText = await res.text().catch(() => "");
@@ -453,6 +484,12 @@ export default function BidRadarApp() {
                   </div>
                 )}
 
+                {!userId && !demoMode && token && (
+                  <div style={{ fontSize: 12, color: "#E0B98F", background: "#2A1F1A", border: "1px solid #4A3324", borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
+                    Your connection hasn't been verified yet — go to Setup and tap "Test connection" first, or this may fail with an auth error.
+                  </div>
+                )}
+
                 <div style={{ display: "flex", gap: 10 }}>
                   <button onClick={() => setShowConfirm(false)} disabled={submitting} className="press" style={{ flex: 1, background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", borderRadius: 10, padding: "12px 0", fontSize: 14, fontWeight: 500 }}>
                     Cancel
@@ -524,6 +561,18 @@ export default function BidRadarApp() {
               <input value={tokenInput} onChange={e => setTokenInput(e.target.value)} type="password" placeholder="Paste token" style={inputStyle} />
               <button onClick={saveToken} className="press" style={saveBtnStyle}>Save</button>
             </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+              <button onClick={testConnection} disabled={testingConn} className="press" style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", borderRadius: 6, padding: "7px 12px", fontSize: 12 }}>
+                {testingConn ? <Loader2 size={12} className="spin" /> : <Check size={12} />}
+                Test connection
+              </button>
+              {userId && !connError && (
+                <span style={{ fontSize: 12, color: "#4FAE7E" }}>Connected as {userName || `user #${userId}`}</span>
+              )}
+            </div>
+            {connError && (
+              <div style={{ fontSize: 12, color: "#E0B98F", marginTop: 8 }}>{connError}</div>
+            )}
           </Field>
 
           <Field label="Skills / keywords" hint="Comma-separated. Drives the fit score on each job.">
