@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { Anchor, Radar, Send, Settings, RefreshCw, Check, Clock, X, Loader2, ArrowLeft, Search, TrendingUp, ListChecks, SlidersHorizontal } from "lucide-react";
+import { Anchor, Radar, Send, Settings, RefreshCw, Check, Clock, X, Loader2, ArrowLeft, Search, TrendingUp, ListChecks, SlidersHorizontal, AlertTriangle } from "lucide-react";
 
 const TOKEN_KEY = "fl_oauth_token";
 const SKILLS_KEY = "fl_skill_keywords";
@@ -83,6 +83,9 @@ export default function BidRadarApp() {
   const [sortKey, setSortKey] = useState("fit");
   const [showSort, setShowSort] = useState(false);
   const [bidFilter, setBidFilter] = useState("all");
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2200); };
 
@@ -182,6 +185,8 @@ export default function BidRadarApp() {
     setSelected(p);
     setDraft("");
     setBidAmount(String(Math.round(parseBudget(p.budget)) || ""));
+    setShowConfirm(false);
+    setSubmitError("");
   };
 
   const generateDraft = async () => {
@@ -226,21 +231,41 @@ export default function BidRadarApp() {
     setDrafting(false);
   };
 
-  const submitBid = async () => {
+  const requestSubmitBid = () => {
+    if (!selected || !draft) return;
+    setSubmitError("");
+    setShowConfirm(true);
+  };
+
+  const confirmSubmitBid = async () => {
     if (!selected) return;
+    setSubmitting(true);
+    setSubmitError("");
     const next = { ...bidStatuses, [selected.id]: { status: "submitted", amount: bidAmount, at: Date.now(), title: selected.title, budget: selected.budget } };
-    if (demoMode || !token) { persistBidStatuses(next); showToast("Bid saved (demo mode)"); return; }
+    if (demoMode || !token) {
+      persistBidStatuses(next);
+      setSubmitting(false);
+      setShowConfirm(false);
+      showToast("Bid saved (demo mode)");
+      return;
+    }
     try {
       const res = await fetch(`${apiBase}/projects/0.1/bids/`, {
         method: "POST",
         headers: { "freelancer-oauth-v1": token, "Content-Type": "application/json" },
         body: JSON.stringify({ project_id: selected.id, bidder_id: null, amount: Number(bidAmount), period: 7, milestone_percentage: 100, description: draft })
       });
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status}${bodyText ? " — " + bodyText.slice(0, 150) : ""}`);
+      }
       persistBidStatuses(next);
+      setSubmitting(false);
+      setShowConfirm(false);
       showToast("Bid submitted");
     } catch (e) {
-      showToast("Bid submission failed — nothing was sent");
+      setSubmitting(false);
+      setSubmitError(e.message || "Something went wrong — nothing was sent.");
     }
   };
 
@@ -267,7 +292,7 @@ export default function BidRadarApp() {
           <Anchor size={20} color="#E8A33D" />
           <div>
             <div className="display" style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.01em" }}>Bid Radar</div>
-            <div className="mono" style={{ fontSize: 10, color: demoMode ? "#5A6270" : "#4FAE7E" }}>{demoMode ? "DEMO MODE" : "● LIVE · freelancer.com"}</div>
+            <div className="mono" style={{ fontSize: 10, color: demoMode ? "#5A6270" : "#4FAE7E" }}>{demoMode ? "DEMO MODE" : <><span className="live-dot">●</span> LIVE · freelancer.com</>}</div>
           </div>
         </div>
         <button onClick={fetchProjects} disabled={loading} className="press" style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", borderRadius: 8, padding: "7px 12px", fontSize: 12 }}>
@@ -377,7 +402,7 @@ export default function BidRadarApp() {
                   <span style={{ fontSize: 12, color: "#8B93A1" }}>Bid amount</span>
                   <input value={bidAmount} onChange={e => setBidAmount(e.target.value)} className="mono" style={{ width: 90, background: "#0F1319", border: "1px solid #2A303B", borderRadius: 6, padding: "6px 10px", color: "#E8E6E1", fontSize: 13 }} />
                 </div>
-                <button onClick={submitBid} disabled={!draft} className="press" style={{ display: "flex", alignItems: "center", gap: 7, background: draft ? "#E8A33D" : "#2A303B", color: draft ? "#12161C" : "#5A6270", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, marginLeft: "auto" }}>
+                <button onClick={requestSubmitBid} disabled={!draft} className="press" style={{ display: "flex", alignItems: "center", gap: 7, background: draft ? "#E8A33D" : "#2A303B", color: draft ? "#12161C" : "#5A6270", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, marginLeft: "auto" }}>
                   <Send size={14} /> Submit bid
                 </button>
               </div>
@@ -394,6 +419,52 @@ export default function BidRadarApp() {
               )}
             </div>
           </div>
+
+          {/* Bid confirmation sheet */}
+          {showConfirm && (
+            <>
+              <div onClick={() => !submitting && setShowConfirm(false)} style={{ position: "fixed", inset: 0, background: "#000000aa", zIndex: 40, animation: "fadeIn 0.18s ease" }} />
+              <div className="sheet-up" style={{ position: "fixed", left: 0, right: 0, bottom: 0, background: "#161B22", borderTop: "1px solid #2A303B", borderRadius: "18px 18px 0 0", padding: "22px 20px 28px", zIndex: 41 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+                  <AlertTriangle size={17} color="#E8A33D" />
+                  <div className="display" style={{ fontSize: 15, fontWeight: 600 }}>Confirm this bid</div>
+                </div>
+                <div style={{ fontSize: 13, color: "#C7CBD1", lineHeight: 1.6, marginBottom: 14 }}>
+                  This sends a real bid to <strong>{selected.title}</strong> through Freelancer.com — it can't be undone from here.
+                </div>
+                <div style={{ background: "#0F1319", border: "1px solid #232833", borderRadius: 10, padding: 14, marginBottom: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                    <span style={{ color: "#8B93A1" }}>Bid amount</span>
+                    <span className="mono" style={{ fontWeight: 600 }}>${bidAmount || 0}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 8 }}>
+                    <span style={{ color: "#8B93A1" }}>Delivery period</span>
+                    <span className="mono">7 days</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 8 }}>
+                    <span style={{ color: "#8B93A1" }}>Proposal length</span>
+                    <span className="mono">{draft.split(/\s+/).filter(Boolean).length} words</span>
+                  </div>
+                </div>
+
+                {submitError && (
+                  <div style={{ fontSize: 12, color: "#E0B98F", background: "#2A1F1A", border: "1px solid #4A3324", borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
+                    {submitError}
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button onClick={() => setShowConfirm(false)} disabled={submitting} className="press" style={{ flex: 1, background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", borderRadius: 10, padding: "12px 0", fontSize: 14, fontWeight: 500 }}>
+                    Cancel
+                  </button>
+                  <button onClick={confirmSubmitBid} disabled={submitting} className="press" style={{ flex: 1.4, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "#E8A33D", border: "none", color: "#12161C", borderRadius: 10, padding: "12px 0", fontSize: 14, fontWeight: 700 }}>
+                    {submitting ? <Loader2 size={16} className="spin" /> : <Send size={15} />}
+                    {submitting ? "Submitting…" : "Confirm & submit"}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -583,6 +654,11 @@ function GlobalStyle() {
       @keyframes popIn { from { opacity: 0; transform: translate(-50%, 8px) scale(0.95); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
       @keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translate(-50%, 4px); } }
       @keyframes expandDown { from { opacity: 0; max-height: 0; } to { opacity: 1; max-height: 60px; } }
+      @keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+      .sheet-up { animation: sheetUp 0.24s cubic-bezier(0.22, 1, 0.36, 1); }
+      .live-dot { animation: pulse 2s ease infinite; }
 
       .view-enter { animation: fadeIn 0.22s ease; }
       .card-item { animation: fadeInUp 0.3s ease backwards; transition: transform 0.12s ease, border-color 0.15s ease; }
