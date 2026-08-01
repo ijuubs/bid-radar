@@ -7,6 +7,8 @@ const BIDS_KEY = "fl_tracked_bids";
 const DEMO_KEY = "fl_demo_mode";
 const PROXY_KEY = "fl_proxy_url";
 const ANTHROPIC_KEY = "fl_anthropic_key";
+const GROQ_KEY = "fl_groq_key";
+const DRAFT_PROVIDER_KEY = "fl_draft_provider";
 const DEFAULT_API_BASE = "https://www.freelancer.com/api";
 
 const DEMO_PROJECTS = [
@@ -63,6 +65,9 @@ export default function BidRadarApp() {
   const [proxyInput, setProxyInput] = useState("");
   const [anthropicKey, setAnthropicKey] = useLocalState(ANTHROPIC_KEY, "");
   const [anthropicKeyInput, setAnthropicKeyInput] = useState("");
+  const [groqKey, setGroqKey] = useLocalState(GROQ_KEY, "");
+  const [groqKeyInput, setGroqKeyInput] = useState("");
+  const [draftProvider, setDraftProvider] = useLocalState(DRAFT_PROVIDER_KEY, "anthropic");
 
   const [projects, setProjects] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -85,6 +90,7 @@ export default function BidRadarApp() {
     const t = localStorage.getItem(TOKEN_KEY); if (t) setTokenInput(t);
     const p = localStorage.getItem(PROXY_KEY); if (p) setProxyInput(p);
     const a = localStorage.getItem(ANTHROPIC_KEY); if (a) setAnthropicKeyInput(a);
+    const g = localStorage.getItem(GROQ_KEY); if (g) setGroqKeyInput(g);
     const d = localStorage.getItem(DEMO_KEY); setDemoModeRaw(d === null ? true : d === "true");
     const b = localStorage.getItem(BIDS_KEY);
     if (b) { try { setBidStatuses(JSON.parse(b)); } catch (e) {} }
@@ -101,6 +107,7 @@ export default function BidRadarApp() {
   const saveToken = () => { setToken(tokenInput); if (tokenInput) setDemoMode(false); showToast("Token saved"); };
   const saveProxy = () => { setProxyUrl(proxyInput.trim().replace(/\/$/, "")); showToast("Proxy URL saved"); };
   const saveAnthropic = () => { setAnthropicKey(anthropicKeyInput.trim()); showToast("Anthropic key saved"); };
+  const saveGroq = () => { setGroqKey(groqKeyInput.trim()); showToast("Groq key saved"); };
 
   const apiBase = proxyUrl ? `${proxyUrl}/api` : DEFAULT_API_BASE;
   const keywords = useMemo(() => skillsInput.split(",").map(s => s.trim()).filter(Boolean), [skillsInput]);
@@ -179,29 +186,40 @@ export default function BidRadarApp() {
 
   const generateDraft = async () => {
     if (!selected) return;
-    if (!anthropicKey) { showToast("Add an Anthropic API key in Setup first"); return; }
+    const usingGroq = draftProvider === "groq";
+    const key = usingGroq ? groqKey : anthropicKey;
+    if (!key) { showToast(`Add a ${usingGroq ? "Groq" : "Anthropic"} API key in Setup first`); return; }
     setDrafting(true);
+    const prompt = `Write a short, specific, non-generic freelance proposal (120-180 words) for this project. No AI-sounding filler like "I was excited to see your posting" or "synergize". Sound like a real developer who actually read the brief. End with a concrete next step or question.\n\nProject title: ${selected.title}\nDescription: ${selected.description}\nSkills needed: ${(selected.skills || []).join(", ")}\nMy relevant background: full-stack React/Vite/Tailwind developer, experience with SEO-driven content sites, AdSense monetization, and structured data (JSON-LD).`;
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": anthropicKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 500,
-          messages: [{
-            role: "user",
-            content: `Write a short, specific, non-generic freelance proposal (120-180 words) for this project. No AI-sounding filler like "I was excited to see your posting" or "synergize". Sound like a real developer who actually read the brief. End with a concrete next step or question.\n\nProject title: ${selected.title}\nDescription: ${selected.description}\nSkills needed: ${(selected.skills || []).join(", ")}\nMy relevant background: full-stack React/Vite/Tailwind developer, experience with SEO-driven content sites, AdSense monetization, and structured data (JSON-LD).`
-          }]
-        })
-      });
-      const data = await response.json();
-      const text = data.content?.find(b => b.type === "text")?.text || `Could not generate draft: ${JSON.stringify(data).slice(0, 200)}`;
-      setDraft(text);
+      if (usingGroq) {
+        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
+          body: JSON.stringify({
+            model: "llama-3.3-70b-versatile",
+            max_tokens: 500,
+            messages: [{ role: "user", content: prompt }],
+          })
+        });
+        const data = await response.json();
+        const text = data.choices?.[0]?.message?.content || `Could not generate draft: ${JSON.stringify(data).slice(0, 200)}`;
+        setDraft(text);
+      } else {
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "anthropic-dangerous-direct-browser-access": "true",
+          },
+          body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 500, messages: [{ role: "user", content: prompt }] })
+        });
+        const data = await response.json();
+        const text = data.content?.find(b => b.type === "text")?.text || `Could not generate draft: ${JSON.stringify(data).slice(0, 200)}`;
+        setDraft(text);
+      }
     } catch (e) {
       setDraft("Draft generation failed: " + e.message);
     }
@@ -252,50 +270,56 @@ export default function BidRadarApp() {
             <div className="mono" style={{ fontSize: 10, color: demoMode ? "#5A6270" : "#4FAE7E" }}>{demoMode ? "DEMO MODE" : "● LIVE · freelancer.com"}</div>
           </div>
         </div>
-        <button onClick={fetchProjects} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", borderRadius: 8, padding: "7px 12px", fontSize: 12 }}>
+        <button onClick={fetchProjects} disabled={loading} className="press" style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", borderRadius: 8, padding: "7px 12px", fontSize: 12 }}>
           {loading ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
         </button>
       </div>
 
       {fetchError && (
-        <div style={{ margin: "12px 16px 0", padding: "10px 14px", background: "#2A1F1A", border: "1px solid #4A3324", borderRadius: 8, fontSize: 12, color: "#E0B98F" }}>{fetchError}</div>
+        <div className="view-enter" style={{ margin: "12px 16px 0", padding: "10px 14px", background: "#2A1F1A", border: "1px solid #4A3324", borderRadius: 8, fontSize: 12, color: "#E0B98F" }}>{fetchError}</div>
       )}
 
       {/* RADAR VIEW */}
       {view === "radar" && !selected && (
-        <div style={{ padding: "16px 16px 8px" }}>
+        <div className="view-enter" style={{ padding: "16px 16px 8px" }}>
           <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
             <div style={{ flex: 1, display: "flex", alignItems: "center", background: "#161B22", border: "1px solid #232833", borderRadius: 10, padding: "0 12px" }}>
               <Search size={15} color="#5A6270" />
               <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search jobs or skills" style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#E8E6E1", padding: "10px 8px", fontSize: 13 }} />
             </div>
-            <button onClick={() => setShowSort(s => !s)} style={{ display: "flex", alignItems: "center", gap: 6, background: showSort ? "#E8A33D" : "#161B22", color: showSort ? "#12161C" : "#E8E6E1", border: "1px solid #232833", borderRadius: 10, padding: "0 14px", fontSize: 12, fontWeight: 500 }}>
+            <button onClick={() => setShowSort(s => !s)} className="press" style={{ display: "flex", alignItems: "center", gap: 6, background: showSort ? "#E8A33D" : "#161B22", color: showSort ? "#12161C" : "#E8E6E1", border: "1px solid #232833", borderRadius: 10, padding: "0 14px", fontSize: 12, fontWeight: 500 }}>
               <SlidersHorizontal size={14} />
             </button>
           </div>
 
           {showSort && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+            <div className="sort-panel" style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
               {Object.entries(SORTS).map(([k, s]) => (
-                <button key={k} onClick={() => { setSortKey(k); setShowSort(false); }} style={{ fontSize: 12, padding: "6px 12px", borderRadius: 20, border: `1px solid ${sortKey === k ? "#E8A33D" : "#2A303B"}`, background: sortKey === k ? "#E8A33D22" : "#161B22", color: sortKey === k ? "#E8A33D" : "#8B93A1" }}>
+                <button key={k} onClick={() => { setSortKey(k); setShowSort(false); }} className="press" style={{ fontSize: 12, padding: "6px 12px", borderRadius: 20, border: `1px solid ${sortKey === k ? "#E8A33D" : "#2A303B"}`, background: sortKey === k ? "#E8A33D22" : "#161B22", color: sortKey === k ? "#E8A33D" : "#8B93A1" }}>
                   {s.label}
                 </button>
               ))}
             </div>
           )}
 
-          <div style={{ fontSize: 12, color: "#5A6270", marginBottom: 10 }}>{visibleProjects.length} matching projects · sorted by {SORTS[sortKey].label.toLowerCase()}</div>
+          <div style={{ fontSize: 12, color: "#5A6270", marginBottom: 10 }}>{loading ? "Loading…" : `${visibleProjects.length} matching projects · sorted by ${SORTS[sortKey].label.toLowerCase()}`}</div>
 
-          {visibleProjects.length === 0 && !loading && (
+          {loading && (
+            <>
+              {[0, 1, 2].map(i => <div key={i} className="skeleton" style={{ height: 92, marginBottom: 10, animationDelay: `${i * 0.05}s` }} />)}
+            </>
+          )}
+
+          {!loading && visibleProjects.length === 0 && (
             <EmptyState title="No matches" subtitle="Try different keywords in Setup, or clear your search." />
           )}
 
-          {visibleProjects.map(p => {
+          {!loading && visibleProjects.map((p, i) => {
             const status = bidStatuses[p.id]?.status;
             const meta = status ? STATUS_META[status] : null;
             return (
-              <div key={p.id} onClick={() => openProject(p)}
-                style={{ padding: "14px 16px", marginBottom: 10, borderRadius: 12, border: "1px solid #232833", background: "#161B22" }}>
+              <div key={p.id} onClick={() => openProject(p)} className="card-item"
+                style={{ padding: "14px 16px", marginBottom: 10, borderRadius: 12, border: "1px solid #232833", background: "#161B22", animationDelay: `${Math.min(i, 8) * 0.04}s` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.35 }}>{p.title}</div>
                   <div className="mono" style={{ fontSize: 12, fontWeight: 700, color: p.score >= 70 ? "#4FAE7E" : p.score >= 40 ? "#E8A33D" : "#5A6270", flexShrink: 0 }}>{p.score}%</div>
@@ -318,9 +342,9 @@ export default function BidRadarApp() {
 
       {/* JOB DETAIL — full screen overlay */}
       {selected && (
-        <div style={{ position: "fixed", inset: 0, background: "#12161C", zIndex: 30, overflowY: "auto" }}>
+        <div className="detail-overlay" style={{ position: "fixed", inset: 0, background: "#12161C", zIndex: 30, overflowY: "auto" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "16px 20px", borderBottom: "1px solid #232833", position: "sticky", top: 0, background: "#12161Cee", backdropFilter: "blur(8px)" }}>
-            <button onClick={() => setSelected(null)} style={{ background: "none", border: "none", color: "#E8E6E1", display: "flex" }}><ArrowLeft size={20} /></button>
+            <button onClick={() => setSelected(null)} className="press" style={{ background: "none", border: "none", color: "#E8E6E1", display: "flex" }}><ArrowLeft size={20} /></button>
             <div className="display" style={{ fontSize: 15, fontWeight: 600 }}>Project details</div>
           </div>
           <div style={{ padding: "20px 20px 40px" }}>
@@ -340,7 +364,7 @@ export default function BidRadarApp() {
             <div style={{ marginTop: 26, borderTop: "1px solid #232833", paddingTop: 22 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                 <div className="display" style={{ fontSize: 15, fontWeight: 600 }}>Proposal draft</div>
-                <button onClick={generateDraft} disabled={drafting} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", borderRadius: 8, padding: "7px 12px", fontSize: 12 }}>
+                <button onClick={generateDraft} disabled={drafting} className="press" style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", borderRadius: 8, padding: "7px 12px", fontSize: 12 }}>
                   {drafting ? <Loader2 size={13} className="spin" /> : <Radar size={13} />}
                   {draft ? "Regenerate" : "Generate draft"}
                 </button>
@@ -353,7 +377,7 @@ export default function BidRadarApp() {
                   <span style={{ fontSize: 12, color: "#8B93A1" }}>Bid amount</span>
                   <input value={bidAmount} onChange={e => setBidAmount(e.target.value)} className="mono" style={{ width: 90, background: "#0F1319", border: "1px solid #2A303B", borderRadius: 6, padding: "6px 10px", color: "#E8E6E1", fontSize: 13 }} />
                 </div>
-                <button onClick={submitBid} disabled={!draft} style={{ display: "flex", alignItems: "center", gap: 7, background: draft ? "#E8A33D" : "#2A303B", color: draft ? "#12161C" : "#5A6270", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, marginLeft: "auto" }}>
+                <button onClick={submitBid} disabled={!draft} className="press" style={{ display: "flex", alignItems: "center", gap: 7, background: draft ? "#E8A33D" : "#2A303B", color: draft ? "#12161C" : "#5A6270", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, marginLeft: "auto" }}>
                   <Send size={14} /> Submit bid
                 </button>
               </div>
@@ -362,7 +386,7 @@ export default function BidRadarApp() {
                 <div style={{ marginTop: 18, display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 12, color: "#8B93A1", alignSelf: "center" }}>Status:</span>
                   {["submitted", "won", "lost"].map(s => (
-                    <button key={s} onClick={() => markStatus(selected.id, s)} style={{ fontSize: 11, background: bidStatuses[selected.id].status === s ? STATUS_META[s].color + "33" : "#1A1F27", color: bidStatuses[selected.id].status === s ? STATUS_META[s].color : "#8B93A1", border: `1px solid ${bidStatuses[selected.id].status === s ? STATUS_META[s].color : "#2A303B"}`, borderRadius: 20, padding: "4px 10px" }}>
+                    <button key={s} onClick={() => markStatus(selected.id, s)} className="press" style={{ fontSize: 11, background: bidStatuses[selected.id].status === s ? STATUS_META[s].color + "33" : "#1A1F27", color: bidStatuses[selected.id].status === s ? STATUS_META[s].color : "#8B93A1", border: `1px solid ${bidStatuses[selected.id].status === s ? STATUS_META[s].color : "#2A303B"}`, borderRadius: 20, padding: "4px 10px" }}>
                       {STATUS_META[s].label}
                     </button>
                   ))}
@@ -375,7 +399,7 @@ export default function BidRadarApp() {
 
       {/* BIDS VIEW */}
       {view === "bids" && !selected && (
-        <div style={{ padding: "16px 16px 8px" }}>
+        <div className="view-enter" style={{ padding: "16px 16px 8px" }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 16 }}>
             <StatCard label="Total" value={stats.total} />
             <StatCard label="Submitted" value={stats.submitted} color="#E8A33D" />
@@ -385,7 +409,7 @@ export default function BidRadarApp() {
 
           <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto" }}>
             {["all", "submitted", "won", "lost"].map(f => (
-              <button key={f} onClick={() => setBidFilter(f)} style={{ fontSize: 12, padding: "6px 12px", borderRadius: 20, whiteSpace: "nowrap", border: `1px solid ${bidFilter === f ? "#E8A33D" : "#2A303B"}`, background: bidFilter === f ? "#E8A33D22" : "#161B22", color: bidFilter === f ? "#E8A33D" : "#8B93A1" }}>
+              <button key={f} onClick={() => setBidFilter(f)} className="press" style={{ fontSize: 12, padding: "6px 12px", borderRadius: 20, whiteSpace: "nowrap", border: `1px solid ${bidFilter === f ? "#E8A33D" : "#2A303B"}`, background: bidFilter === f ? "#E8A33D22" : "#161B22", color: bidFilter === f ? "#E8A33D" : "#8B93A1" }}>
                 {f === "all" ? "All" : STATUS_META[f].label}
               </button>
             ))}
@@ -393,10 +417,10 @@ export default function BidRadarApp() {
 
           {bidList.length === 0 && <EmptyState title="No bids yet" subtitle="Submitted bids will show up here so you can track outcomes." />}
 
-          {bidList.map(b => {
+          {bidList.map((b, i) => {
             const meta = STATUS_META[b.status] || STATUS_META.drafted;
             return (
-              <div key={b.id} style={{ padding: "14px 16px", marginBottom: 10, borderRadius: 12, border: "1px solid #232833", background: "#161B22" }}>
+              <div key={b.id} className="card-item" style={{ padding: "14px 16px", marginBottom: 10, borderRadius: 12, border: "1px solid #232833", background: "#161B22", animationDelay: `${Math.min(i, 8) * 0.04}s` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.35 }}>{b.title || "Untitled project"}</div>
                   <div style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: meta.color, background: meta.color + "1a", padding: "3px 8px", borderRadius: 20, height: "fit-content", flexShrink: 0 }}>
@@ -410,7 +434,7 @@ export default function BidRadarApp() {
                 </div>
                 <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
                   {["submitted", "won", "lost"].map(s => (
-                    <button key={s} onClick={() => markStatus(b.id, s)} style={{ fontSize: 11, background: b.status === s ? STATUS_META[s].color + "33" : "#1A1F27", color: b.status === s ? STATUS_META[s].color : "#8B93A1", border: `1px solid ${b.status === s ? STATUS_META[s].color : "#2A303B"}`, borderRadius: 20, padding: "3px 10px" }}>
+                    <button key={s} onClick={() => markStatus(b.id, s)} className="press" style={{ fontSize: 11, background: b.status === s ? STATUS_META[s].color + "33" : "#1A1F27", color: b.status === s ? STATUS_META[s].color : "#8B93A1", border: `1px solid ${b.status === s ? STATUS_META[s].color : "#2A303B"}`, borderRadius: 20, padding: "3px 10px" }}>
                       {STATUS_META[s].label}
                     </button>
                   ))}
@@ -423,11 +447,11 @@ export default function BidRadarApp() {
 
       {/* SETUP VIEW */}
       {view === "setup" && !selected && (
-        <div style={{ padding: "20px 16px 40px", maxWidth: 560 }}>
+        <div className="view-enter" style={{ padding: "20px 16px 40px", maxWidth: 560 }}>
           <Field label="Freelancer.com OAuth token" hint="Generate at freelancer.com → Settings → API. Without one, this stays in demo mode.">
             <div style={{ display: "flex", gap: 8 }}>
               <input value={tokenInput} onChange={e => setTokenInput(e.target.value)} type="password" placeholder="Paste token" style={inputStyle} />
-              <button onClick={saveToken} style={saveBtnStyle}>Save</button>
+              <button onClick={saveToken} className="press" style={saveBtnStyle}>Save</button>
             </div>
           </Field>
 
@@ -438,14 +462,28 @@ export default function BidRadarApp() {
           <Field label="Proxy URL" hint="Only needed if direct calls get CORS-blocked. Leave blank to call freelancer.com directly.">
             <div style={{ display: "flex", gap: 8 }}>
               <input value={proxyInput} onChange={e => setProxyInput(e.target.value)} placeholder="https://your-worker.workers.dev" style={inputStyle} />
-              <button onClick={saveProxy} style={saveBtnStyle}>Save</button>
+              <button onClick={saveProxy} className="press" style={saveBtnStyle}>Save</button>
             </div>
           </Field>
 
-          <Field label="Anthropic API key" hint="From console.anthropic.com → API Keys. Used to draft proposals. Stored only in this browser.">
+          <Field label="Proposal drafting provider" hint="Anthropic gives the best writing quality. Groq is free (no credit card, generous daily limit) but uses an open-source model instead of Claude.">
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => setDraftProvider("anthropic")} className="press" style={{ flex: 1, fontSize: 12, padding: "8px 10px", borderRadius: 8, border: `1px solid ${draftProvider === "anthropic" ? "#E8A33D" : "#2A303B"}`, background: draftProvider === "anthropic" ? "#E8A33D22" : "#161B22", color: draftProvider === "anthropic" ? "#E8A33D" : "#8B93A1", fontWeight: 500 }}>Anthropic</button>
+              <button onClick={() => setDraftProvider("groq")} className="press" style={{ flex: 1, fontSize: 12, padding: "8px 10px", borderRadius: 8, border: `1px solid ${draftProvider === "groq" ? "#E8A33D" : "#2A303B"}`, background: draftProvider === "groq" ? "#E8A33D22" : "#161B22", color: draftProvider === "groq" ? "#E8A33D" : "#8B93A1", fontWeight: 500 }}>Groq (free)</button>
+            </div>
+          </Field>
+
+          <Field label="Anthropic API key" hint="From console.anthropic.com → API Keys. Requires credits. Stored only in this browser.">
             <div style={{ display: "flex", gap: 8 }}>
               <input value={anthropicKeyInput} onChange={e => setAnthropicKeyInput(e.target.value)} type="password" placeholder="sk-ant-..." style={inputStyle} />
-              <button onClick={saveAnthropic} style={saveBtnStyle}>Save</button>
+              <button onClick={saveAnthropic} className="press" style={saveBtnStyle}>Save</button>
+            </div>
+          </Field>
+
+          <Field label="Groq API key (free tier)" hint="From console.groq.com → API Keys — no credit card needed. Stored only in this browser.">
+            <div style={{ display: "flex", gap: 8 }}>
+              <input value={groqKeyInput} onChange={e => setGroqKeyInput(e.target.value)} type="password" placeholder="gsk_..." style={inputStyle} />
+              <button onClick={saveGroq} className="press" style={saveBtnStyle}>Save</button>
             </div>
           </Field>
 
@@ -454,8 +492,8 @@ export default function BidRadarApp() {
               <div style={{ fontSize: 13, fontWeight: 500 }}>Demo mode</div>
               <div style={{ fontSize: 11, color: "#5A6270" }}>Browse sample jobs without a live token</div>
             </div>
-            <button onClick={() => setDemoMode(!demoMode)} style={{ width: 44, height: 26, borderRadius: 20, background: demoMode ? "#E8A33D" : "#2A303B", border: "none", position: "relative", flexShrink: 0 }}>
-              <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#12161C", position: "absolute", top: 3, left: demoMode ? 21 : 3, transition: "left 0.15s" }} />
+            <button onClick={() => setDemoMode(!demoMode)} style={{ width: 44, height: 26, borderRadius: 20, background: demoMode ? "#E8A33D" : "#2A303B", border: "none", position: "relative", flexShrink: 0, transition: "background 0.2s ease" }}>
+              <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#12161C", position: "absolute", top: 3, left: demoMode ? 21 : 3, transition: "left 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)" }} />
             </button>
           </div>
         </div>
@@ -463,7 +501,7 @@ export default function BidRadarApp() {
 
       {/* Toast */}
       {toast && (
-        <div style={{ position: "fixed", bottom: 84, left: "50%", transform: "translateX(-50%)", background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", padding: "10px 18px", borderRadius: 30, fontSize: 13, zIndex: 40, boxShadow: "0 8px 24px #00000055" }}>
+        <div className="toast-pop" style={{ position: "fixed", bottom: 84, left: "50%", background: "#1A1F27", border: "1px solid #2A303B", color: "#E8E6E1", padding: "10px 18px", borderRadius: 30, fontSize: 13, zIndex: 40, boxShadow: "0 8px 24px #00000055" }}>
           {toast}
         </div>
       )}
@@ -482,8 +520,8 @@ export default function BidRadarApp() {
 
 function NavButton({ icon: Icon, label, active, onClick, badge }) {
   return (
-    <button onClick={onClick} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "10px 0 12px", background: "none", border: "none", color: active ? "#E8A33D" : "#5A6270", position: "relative" }}>
-      <Icon size={19} />
+    <button onClick={onClick} className={`nav-btn press${active ? " active" : ""}`} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "10px 0 12px", background: "none", border: "none", color: active ? "#E8A33D" : "#5A6270", position: "relative" }}>
+      <span className="nav-icon-wrap" style={{ display: "flex" }}><Icon size={19} /></span>
       <span style={{ fontSize: 10.5, fontWeight: 500 }}>{label}</span>
       {badge ? <span style={{ position: "absolute", top: 4, right: "28%", background: "#E8A33D", color: "#12161C", fontSize: 9, fontWeight: 700, borderRadius: 10, padding: "1px 5px" }}>{badge}</span> : null}
     </button>
@@ -533,9 +571,32 @@ function GlobalStyle() {
       .display { font-family: 'Space Grotesk', sans-serif; }
       button { cursor: pointer; font-family: inherit; }
       input, textarea { font-family: inherit; }
+      input, textarea, button { transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease, transform 0.1s ease; }
       input:focus, textarea:focus { outline: 1px solid #E8A33D; }
       .spin { animation: spin 1s linear infinite; }
       @keyframes spin { to { transform: rotate(360deg); } }
+
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes fadeInUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+      @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+      @keyframes shimmer { 0% { background-position: -200px 0; } 100% { background-position: calc(200px + 100%) 0; } }
+      @keyframes popIn { from { opacity: 0; transform: translate(-50%, 8px) scale(0.95); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+      @keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translate(-50%, 4px); } }
+      @keyframes expandDown { from { opacity: 0; max-height: 0; } to { opacity: 1; max-height: 60px; } }
+
+      .view-enter { animation: fadeIn 0.22s ease; }
+      .card-item { animation: fadeInUp 0.3s ease backwards; transition: transform 0.12s ease, border-color 0.15s ease; }
+      .card-item:active { transform: scale(0.985); border-color: #3A4250 !important; }
+      .detail-overlay { animation: slideUp 0.28s cubic-bezier(0.22, 1, 0.36, 1); }
+      .toast-pop { animation: popIn 0.25s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+      .sort-panel { animation: expandDown 0.2s ease; overflow: hidden; }
+      .press { transition: transform 0.1s ease; }
+      .press:active { transform: scale(0.94); }
+      .skeleton { background: linear-gradient(90deg, #161B22 25%, #1E2530 37%, #161B22 63%); background-size: 400px 100%; animation: shimmer 1.4s ease infinite; border-radius: 12px; }
+      .nav-btn { transition: color 0.2s ease; }
+      .nav-icon-wrap { transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1); }
+      .nav-btn.active .nav-icon-wrap { transform: translateY(-2px) scale(1.08); }
+      .refresh-spin-enter { transition: transform 0.2s ease; }
     `}</style>
   );
 }
